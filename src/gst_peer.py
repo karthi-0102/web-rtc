@@ -190,6 +190,10 @@ class Peer:
         self.recv_audio = recv_audio
         self.elements = []
         self.webrtc = None
+        # Names of inbound pads already handled. Keyed per pad, not per peer:
+        # every inbound pad must end up either played or drained, and a pad
+        # left unhandled back-pressures nicesrc into killing the pipeline.
+        self.handled_pads = set()
 
     def build(self):
         cfg = self.server.cfg
@@ -419,24 +423,54 @@ class Peer:
                 id=self.id)
             self._drain(pad, 'recvAudio disabled')
             return
-        caps = pad.get_current_caps()
+        if caps_now is not None:
+            self._attach_inbound(pad, caps_now)
+            return
+        # webrtcbin usually adds the pad before its caps are negotiated, so the
+        # pad reads as having no caps at all for a moment. Classifying it now
+        # would file a perfectly good Opus pad under 'non-audio' and drain it --
+        # which is exactly how talk-back goes silent. Wait for the CAPS event
+        # instead, and attach from the main loop rather than the streaming
+        # thread, since linking from inside a probe can deadlock.
+        log('debug', 'inbound pad has no caps yet — waiting for the CAPS event',
+            id=self.id)
+
+        def on_event(probed_pad, info):
+            event = info.get_event()
+            if event is None or event.type != Gst.EventType.CAPS:
+                return Gst.PadProbeReturn.OK
+            GLib.idle_add(self._attach_inbound, probed_pad, event.parse_caps())
+            return Gst.PadProbeReturn.REMOVE
+
+        pad.add_probe(Gst.PadProbeType.EVENT_DOWNSTREAM, on_event)
+
+    def _attach_inbound(self, pad, caps):
+        """Play this pad if it carries Opus, drain it otherwise. Idempotent:
+        reached both directly and from the deferred CAPS probe."""
+        key = pad.get_name()
+        if key in self.handled_pads or pad.is_linked():
+            return False
+        self.handled_pads.add(key)
         name = caps.to_string() if caps else ''
         if 'OPUS' not in name.upper() and 'audio' not in name:
-            log('debug', 'ignoring inbound non-audio pad', id=self.id)
+            log('debug', 'ignoring inbound non-audio pad', id=self.id,
+                caps=name[:70])
             self._drain(pad, 'non-audio pad')
-            return
+            return False
         sink = self.server.cfg.get('audioOutPipeline') or 'autoaudiosink sync=false'
         desc = f'rtpopusdepay ! opusdec ! audioconvert ! audioresample ! {sink}'
         try:
             bin_ = Gst.parse_bin_from_description(desc, True)
         except GLib.Error as err:
             log('error', 'failed to build audio sink', id=self.id, error=str(err))
-            return
+            return False
         self.server.pipe.add(bin_)
         self.elements.append(bin_)
         bin_.sync_state_with_parent()
-        pad.link(bin_.get_static_pad('sink'))
-        log('info', 'playing inbound audio', id=self.id, sink=sink)
+        result = pad.link(bin_.get_static_pad('sink'))
+        log('info', 'playing inbound audio', id=self.id, sink=sink,
+            caps=name[:70], link=result.value_nick)
+        return False    # one-shot when called via GLib.idle_add
 
     def destroy(self):
         for el in self.elements:

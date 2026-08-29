@@ -11,7 +11,8 @@
  * Storage and live are the same media, encoded once and fanned out by a tee in
  * the GStreamer helper. AWS's storage session appears on the signaling channel
  * as just another peer sending an offer, so it flows through the same path as a
- * human viewer — it simply never sends audio back.
+ * human viewer — including the audio it sends back, which carries the talk-back
+ * of every viewer AWS is fanning out to.
  *
  * H.264 is mandatory for ingestion, which is why this path uses GStreamer
  * rather than the @roamhq/wrtc used by master.js.
@@ -222,11 +223,13 @@ async function main() {
       mediaId,
     });
 
-    // Humans talk back. AWS declares audio sendrecv on the storage session, so
-    // INGEST_RECV_STORAGE_AUDIO=true lets us attach a sink and see whether it
-    // actually sends anything.
+    // Talk-back is on for every peer, storage included. AWS declares the
+    // storage session's audio sendrecv and relays each viewer's microphone
+    // through it, so draining that pad by default threw away the only channel a
+    // viewer has back to the master. INGEST_RECV_STORAGE_AUDIO=false restores
+    // the old drain-it behaviour for a master that genuinely only publishes.
     const recvAudio = storage
-      ? /^(1|true|yes|on)$/i.test(process.env.INGEST_RECV_STORAGE_AUDIO || '')
+      ? !/^(0|false|no|off)$/i.test(process.env.INGEST_RECV_STORAGE_AUDIO || '')
       : true;
     media.addPeer(mediaId, { recvAudio });
     media.setRemoteOffer(mediaId, offer.sdp);

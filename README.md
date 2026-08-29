@@ -215,8 +215,8 @@ channel for the low-latency path.
 ### Does the master receive audio *from* AWS? No.
 
 AWS's storage offer declares audio `sendrecv`, which suggests it might talk
-back. It does not. With `INGEST_RECV_STORAGE_AUDIO=true` attaching a real sink,
-and a pad probe counting buffers, a 70 s archiving session produced:
+back. It does not. With a real sink attached and a pad probe counting buffers,
+a 70 s archiving session produced:
 
 ```
 INBOUND PAD appeared      : 0
@@ -228,6 +228,11 @@ The probe is not broken — the same code against a talk-back viewer shows
 frames). The storage session is strictly one-way ingestion, so the master's
 `AUDIO_OUT` is irrelevant while archiving; talk-back needs the peer-to-peer
 path on a non-ingestion channel.
+
+The master nonetheless attaches a sink to the storage peer by default, so the
+audio plays the moment it ever does arrive. Nothing is lost by trying: when AWS
+sends nothing there is no pad to attach to, and the sink is never built. Set
+`INGEST_RECV_STORAGE_AUDIO=false` to go back to draining that pad unheard.
 
 ### Why GStreamer and not wrtc
 
