@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KVS master monitor</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c232c;
+    --line: #2a323d;
+    --text: #d7dee7;
+    --dim: #7d8794;
+    --accent: #4aa8ff;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --err: #f85149;
+    --in: #a371f7;
+    --out: #4aa8ff;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.5 var(--mono);
+  }
+  header {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 5;
+  }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  .kv { color: var(--dim); }
+  .kv b { color: var(--text); font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--err); }
+  .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  main {
+    display: grid; gap: 12px; padding: 12px;
+    grid-template-columns: minmax(360px, 1fr) minmax(420px, 1.2fr);
+  }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    display: flex; flex-direction: column; min-width: 0;
+  }
+  section > h2 {
+    margin: 0; padding: 8px 12px; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .8px; color: var(--dim); border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 10px;
+  }
+  section > h2 .right { margin-left: auto; text-transform: none; letter-spacing: 0; }
+  .body { padding: 12px; min-width: 0; }
+  #video-wrap {
+    background: #000; aspect-ratio: 4 / 3; display: flex; align-items: center;
+    justify-content: center; position: relative; overflow: hidden;
+  }
+  #video { max-width: 100%; max-height: 100%; display: none; }
+  #video-empty { color: var(--dim); text-align: center; padding: 20px; font-size: 12px; }
+  #video-badge {
+    position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.6);
+    border: 1px solid var(--line); border-radius: 4px; padding: 2px 7px; font-size: 11px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--dim); font-weight: 600; }
+  td.wrap { white-space: normal; word-break: break-all; }
+  .pill {
+    display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
+    border: 1px solid var(--line); background: var(--panel-2);
+  }
+  .pill.ok { color: var(--ok); border-color: #24603a; }
+  .pill.warn { color: var(--warn); border-color: #5c471a; }
+  .pill.err { color: var(--err); border-color: #6b2b28; }
+  .pill.in { color: var(--in); border-color: #46315f; }
+  .pill.out { color: var(--out); border-color: #1f4a72; }
+  .meter { height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  .meter > i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .12s linear; }
+  .grid2 { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 12px; }
+  .grid2 span:nth-child(odd) { color: var(--dim); }
+  #feed { max-height: 62vh; overflow: auto; }
+  .row {
+    display: flex; gap: 8px; padding: 3px 12px; border-bottom: 1px solid #1b212a;
+    align-items: baseline;
+  }
+  .row:hover { background: var(--panel-2); }
+  .row .t { color: var(--dim); flex: 0 0 auto; }
+  .row .tag { flex: 0 0 auto; }
+  .row .msg { flex: 1 1 auto; min-width: 0; word-break: break-word; }
+  .row .fields { color: var(--dim); }
+  .row.level-error .msg { color: var(--err); }
+  .row.level-warn .msg { color: var(--warn); }
+  .row.signal .msg { color: #e7eef7; }
+  .comp { color: var(--in); }
+  details.sdp { margin-top: 3px; }
+  details.sdp summary { color: var(--accent); cursor: pointer; font-size: 11px; }
+  details.sdp pre {
+    margin: 4px 0 0; padding: 8px; background: #0a0d12; border: 1px solid var(--line);
+    border-radius: 6px; max-height: 300px; overflow: auto; font-size: 11px; white-space: pre;
+  }
+  .controls { display: flex; gap: 6px; align-items: center; }
+  button, label.chk {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 5px; padding: 3px 9px; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  button.active { border-color: var(--accent); color: var(--accent); }
+  .empty { color: var(--dim); padding: 10px 12px; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>KVS <span id="role">master</span> monitor</h1>
+  <span class="kv"><span class="dot" id="link"></span> <span id="link-text">connecting…</span></span>
+  <span class="kv">channel <b id="channel">—</b></span>
+  <span class="kv">region <b id="region">—</b></span>
+  <span class="kv">pid <b id="pid">—</b></span>
+  <span class="kv">uptime <b id="uptime">—</b></span>
+  <span class="kv">peers <b id="peer-count">0</b></span>
+</header>
+
+<main>
+  <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
+    <section>
+      <h2>Published video
+        <span class="right kv"><b id="preview-fps">0</b> preview fps · <b id="frame-count">0</b> frames</span>
+      </h2>
+      <div id="video-wrap">
+        <img id="video" alt="published video preview">
+        <div id="video-empty">waiting for the first published frame…</div>
+        <div id="video-badge" hidden></div>
+      </div>
+      <div class="body">
+        <div class="grid2" id="media-info"></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Talk-back audio from viewers</h2>
+      <div class="body">
+        <div class="meter"><i id="level"></i></div>
+        <div class="kv" style="margin-top:6px">peak <b id="level-peak">0%</b> · source <b id="level-peer">—</b></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Peers</h2>
+      <div id="peers"><div class="empty">no peers yet — nothing is receiving this stream</div></div>
+    </section>
+
+    <section>
+      <h2>RTP stats</h2>
+      <div id="stats"><div class="empty">no stats sampled yet</div></div>
+    </section>
+  </div>
+
+  <section>
+    <h2>Messages
+      <span class="right controls">
+        <button data-filter="all" class="active">all</button>
+        <button data-filter="signal">signaling</button>
+        <button data-filter="log">log</button>
+        <label class="chk"><input type="checkbox" id="follow" checked> follow</label>
+        <button id="clear">clear</button>
+      </span>
+    </h2>
+    <div id="feed"></div>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+
+  const el = (id) => document.getElementById(id);
+  const feed = el('feed');
+  const state = { role: 'master', startedAt: Date.now(), peers: new Map(), stats: new Map(), filter: 'all', peak: 0 };
+  const MAX_ROWS = 600;
+
+  /* --------------------------------------------------------------- helpers */
+
+  const pad = (n) => String(n).padStart(2, '0');
+  const clock = (ts) => {
+    const d = new Date(ts);
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+  };
+  const since = (ts) => {
+    const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ${s % 60}s`;
+    return `${Math.floor(m / 60)}h ${m % 60}m`;
+  };
+  const esc = (value) => String(value).replace(/[&<>"]/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const fieldsText = (details) => {
+    if (!details) return '';
+    if (typeof details === 'string') return details;
+    return Object.entries(details).map(([k, v]) => `${k}=${v}`).join(' ');
+  };
+
+  function stateClass(value) {
+    if (['connected', 'completed', 'succeeded', 'open'].includes(value)) return 'ok';
+    if (['failed', 'closed', 'error', 'disconnected'].includes(value)) return 'err';
+    return 'warn';
+  }
+
+  /* ------------------------------------------------------------ feed rows */
+
+  function addRow(event) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.dataset.kind = event.t === 'signal' ? 'signal' : 'log';
+
+    let tag = '';
+    let msg = '';
+
+    if (event.t === 'signal') {
+      row.classList.add('signal');
+      const cls = event.dir === 'in' ? 'in' : 'out';
+      const arrow = event.dir === 'in' ? '◀ in ' : ' out ▶';
+      tag = `<span class="pill ${cls}">${arrow}</span>`;
+      const peer = event.peer ? ` <span class="comp">${esc(event.peer)}</span>` : '';
+      msg = `<b>${esc(event.kind)}</b>${peer}`;
+      if (event.note) msg += ` <span class="fields">${esc(event.note)}</span>`;
+      if (event.candidate) {
+        msg += ` <span class="fields">${esc(fieldsText(event.candidate))}</span>`;
+      }
+      if (event.sections) {
+        const summary = event.sections
+          .map((s) => `m=${s.kind}/${s.direction}${s.codecs ? ` [${s.codecs}]` : ''}`).join('  ');
+        msg += `<div class="fields">${esc(summary)}</div>`;
+        msg += `<details class="sdp"><summary>full SDP (${event.sdp.length} bytes)</summary>`
+          + `<pre>${esc(event.sdp)}</pre></details>`;
+      }
+    } else {
+      row.classList.add(`level-${event.level}`);
+      tag = `<span class="pill ${event.level === 'error' ? 'err' : event.level === 'warn' ? 'warn' : ''}">`
+        + `${esc(event.level)}</span>`;
+      msg = `<span class="comp">[${esc(event.component)}]</span> ${esc(event.message)}`;
+      const extra = fieldsText(event.details);
+      if (extra) msg += ` <span class="fields">${esc(extra)}</span>`;
+    }
+
+    row.innerHTML = `<span class="t">${clock(event.ts)}</span><span class="tag">${tag}</span>`
+      + `<span class="msg">${msg}</span>`;
+    if (state.filter !== 'all' && row.dataset.kind !== state.filter) row.hidden = true;
+
+    feed.appendChild(row);
+    while (feed.childElementCount > MAX_ROWS) feed.removeChild(feed.firstElementChild);
+    if (el('follow').checked) feed.scrollTop = feed.scrollHeight;
+  }
+
+  /* ----------------------------------------------------------- side panels */
+
+  function renderPeers() {
+    const host = el('peers');
+    el('peer-count').textContent = state.peers.size;
+    if (!state.peers.size) {
+      host.innerHTML = '<div class="empty">no peers yet — nothing is receiving this stream</div>';
+      return;
+    }
+    const rows = [...state.peers.values()].map((p) => `
+      <tr>
+        <td class="wrap">${esc(p.id)}</td>
+        <td><span class="pill ${p.kind === 'aws-storage' ? 'in' : ''}">${esc(p.kind || 'viewer')}</span></td>
+        <td><span class="pill ${stateClass(p.state)}">${esc(p.state || '—')}</span></td>
+        <td>${esc(p.ice || '—')}</td>
+        <td>${p.connectedAt ? since(p.connectedAt) : '—'}</td>
+      </tr>`).join('');
+    host.innerHTML = `<table><thead><tr><th>client id</th><th>kind</th><th>state</th>`
+      + `<th>ice</th><th>up</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function renderStats() {
+    const host = el('stats');
+    if (!state.stats.size) {
+      host.innerHTML = '<div class="empty">no stats sampled yet</div>';
+      return;
+    }
+    const blocks = [...state.stats.entries()].map(([peer, s]) => {
+      const line = (dir, t) => `<tr><td>${dir} ${esc(t.kind)}</td>`
+        + `<td>${t.kbps === undefined || t.kbps === null ? '—' : `${t.kbps} kbps`}</td>`
+        + `<td>${t.fps === undefined || t.fps === null ? '' : `${t.fps} fps`}</td>`
+        + `<td>${t.size || ''}</td>`
+        + `<td>${t.packets != null ? `${t.packets} pkt` : ''}${t.lost ? ` · lost ${t.lost}` : ''}`
+        + `${t.jitterMs ? ` · jitter ${t.jitterMs}ms` : ''}</td></tr>`;
+      const tx = (s.tx || []).map((t) => line('tx', t)).join('');
+      const rx = (s.rx || []).map((t) => line('rx', t)).join('');
+      const pair = s.pair
+        ? `<div class="kv" style="padding:4px 8px">pair <b>${esc(s.pair.local)} → ${esc(s.pair.remote)}</b>`
+          + `${s.pair.rttMs != null ? ` · rtt ${s.pair.rttMs}ms` : ''}`
+          + `${s.pair.availableKbps != null ? ` · avail ${s.pair.availableKbps} kbps` : ''}</div>`
+        : '<div class="kv" style="padding:4px 8px">no candidate pair selected yet</div>';
+      return `<div style="border-bottom:1px solid var(--line)">`
+        + `<div class="kv" style="padding:6px 8px">peer <b>${esc(peer)}</b></div>`
+        + `${pair}<table><tbody>${tx}${rx}</tbody></table></div>`;
+    }).join('');
+    host.innerHTML = blocks;
+  }
+
+  function renderMedia(media, config) {
+    const rows = [];
+    const push = (k, v) => rows.push(`<span>${esc(k)}</span><span>${esc(v)}</span>`);
+    if (config) {
+      push('channel', config.channel);
+      push('force turn', String(Boolean(config.forceTurn)));
+    }
+    if (media && media.video) {
+      const v = media.video;
+      push('video in', `${v.input} · ${v.size} @ ${v.fps} fps`);
+      push('video codec', v.codec || '—');
+      el('video-badge').hidden = false;
+      el('video-badge').textContent = `${v.size} @ ${v.fps} fps · ${v.codec || ''}`;
+    }
+    if (media && media.audio) {
+      const a = media.audio;
+      push('audio in', `${a.input} · ${a.sampleRate} Hz · ${a.channels} ch`);
+      push('audio codec', a.codec || '—');
+    }
+    if (media && media.archiving !== undefined) {
+      push('archiving to KVS', media.archiving ? 'yes' : 'no (live only)');
+    }
+    if (media && media.liveViewers !== undefined) push('live viewers', media.liveViewers);
+    if (media && media.publishedFrames) push('frames published', media.publishedFrames);
+    el('media-info').innerHTML = rows.join('');
+  }
+
+  /* ------------------------------------------------------------- preview */
+
+  let frames = 0;
+  let framesAtTick = 0;
+  let objectUrl = null;
+
+  function showFrame(blob) {
+    frames += 1;
+    el('frame-count').textContent = frames;
+    const img = el('video');
+    const next = URL.createObjectURL(blob);
+    img.onload = () => { if (objectUrl) URL.revokeObjectURL(objectUrl); objectUrl = next; };
+    img.src = next;
+    if (img.style.display !== 'block') {
+      img.style.display = 'block';
+      el('video-empty').style.display = 'none';
+    }
+  }
+
+  setInterval(() => {
+    el('preview-fps').textContent = frames - framesAtTick;
+    framesAtTick = frames;
+    el('uptime').textContent = since(state.startedAt);
+    renderPeers();
+    // The meter falls back to silence when nothing arrives.
+    const bar = el('level');
+    const width = parseFloat(bar.style.width) || 0;
+    if (width > 0) bar.style.width = `${Math.max(0, width - 8)}%`;
+  }, 1000);
+
+  /* ----------------------------------------------------------- websocket */
+
+  function connect() {
+    const socket = new WebSocket(`ws://${location.host}`);
+    socket.binaryType = 'blob';
+
+    socket.onopen = () => {
+      el('link').classList.add('on');
+      el('link-text').textContent = 'live';
+    };
+    socket.onclose = () => {
+      el('link').classList.remove('on');
+      el('link-text').textContent = 'master not running — retrying';
+      setTimeout(connect, 1500);
+    };
+    socket.onerror = () => socket.close();
+
+    socket.onmessage = (event) => {
+      if (typeof event.data !== 'string') { showFrame(event.data); return; }
+      let msg;
+      try { msg = JSON.parse(event.data); } catch { return; }
+      handle(msg);
+    };
+  }
+
+  function handle(msg) {
+    switch (msg.t) {
+      case 'hello': {
+        state.role = msg.role;
+        state.startedAt = msg.startedAt;
+        el('role').textContent = msg.role;
+        el('channel').textContent = (msg.config && msg.config.channel) || '—';
+        el('region').textContent = (msg.config && msg.config.region) || '—';
+        el('pid').textContent = (msg.config && msg.config.pid) || '—';
+        state.peers = new Map((msg.peers || []).map((p) => [p.id, p]));
+        state.stats = new Map(Object.entries(msg.stats || {}));
+        renderMedia(msg.media, msg.config);
+        feed.innerHTML = '';
+        for (const event of msg.events || []) addRow(event);
+        renderPeers();
+        renderStats();
+        break;
+      }
+      case 'peer':
+        state.peers.set(msg.peer.id, msg.peer);
+        renderPeers();
+        addRow({ t: 'log', ts: msg.ts, level: 'info', component: 'peer',
+          message: `${msg.peer.id} → ${msg.peer.state}`,
+          details: { kind: msg.peer.kind, ice: msg.peer.ice } });
+        break;
+      case 'peer-gone':
+        state.peers.delete(msg.peer);
+        state.stats.delete(msg.peer);
+        renderPeers();
+        renderStats();
+        addRow({ t: 'log', ts: msg.ts, level: 'warn', component: 'peer',
+          message: `${msg.peer} disconnected`, details: { heldMs: msg.heldMs } });
+        break;
+      case 'stats':
+        state.stats.set(msg.peer, msg);
+        renderStats();
+        break;
+      case 'media':
+        renderMedia(msg.media, null);
+        break;
+      case 'level': {
+        const percent = Math.min(100, Math.round(msg.level * 300)); // speech sits low in RMS
+        el('level').style.width = `${percent}%`;
+        el('level-peer').textContent = msg.peer;
+        state.peak = Math.max(state.peak, percent);
+        el('level-peak').textContent = `${state.peak}%`;
+        break;
+      }
+      case 'signal':
+      case 'log':
+        addRow(msg);
+        break;
+      default:
+        break;
+    }
+  }
+
+  /* ------------------------------------------------------------ controls */
+
+  for (const button of document.querySelectorAll('[data-filter]')) {
+    button.addEventListener('click', () => {
+      state.filter = button.dataset.filter;
+      for (const other of document.querySelectorAll('[data-filter]')) {
+        other.classList.toggle('active', other === button);
+      }
+      for (const row of feed.children) {
+        row.hidden = state.filter !== 'all' && row.dataset.kind !== state.filter;
+      }
+    });
+  }
+  el('clear').addEventListener('click', () => { feed.innerHTML = ''; });
+
+  connect();
+})();
+</script>
+</body>
+</html>

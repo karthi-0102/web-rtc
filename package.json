@@ -1,0 +1,26 @@
+{
+  "name": "kvs-webrtc-two-way",
+  "version": "1.0.0",
+  "description": "Amazon Kinesis Video Streams WebRTC two-way media: master streams video+audio and receives audio; viewer receives video+audio and sends audio back.",
+  "private": true,
+  "main": "src/master.js",
+  "scripts": {
+    "master": "node src/master.js",
+    "viewer": "node src/viewer.js",
+    "ingest": "node src/ingest-master.js",
+    "ingest-viewer": "node src/ingest-viewer.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@aws-sdk/client-kinesis-video": "^3.658.0",
+    "@aws-sdk/client-kinesis-video-signaling": "^3.658.0",
+    "@aws-sdk/client-kinesis-video-webrtc-storage": "^3.1112.0",
+    "@aws-sdk/credential-providers": "^3.658.0",
+    "@roamhq/wrtc": "^0.8.0",
+    "amazon-kinesis-video-streams-webrtc": "^2.3.0",
+    "dotenv": "^16.4.5",
+    "ws": "^8.18.0"
+  }
+}
