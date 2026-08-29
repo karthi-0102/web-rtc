@@ -99,21 +99,6 @@ class Viewer:
         log('info', 'viewer pipeline PLAYING')
         emit({'type': 'ready'})
 
-    def _report_latency(self):
-        """Playback-side contribution to the delay. Logged once media is
-        actually flowing, since an empty pipeline has nothing to report."""
-        query = Gst.Query.new_latency()
-        if not self.pipe.query(query):
-            log('debug', 'pipeline did not answer the latency query')
-            return False
-        live, min_ns, max_ns = query.parse_latency()
-        log('info', 'playback-side pipeline latency', live=live,
-            jitterBufferMs=self.cfg.get('latencyMs', 100),
-            queueCapMs=self.cfg.get('queueMs', 200),
-            minMs=round(min_ns / 1e6, 1),
-            maxMs=(round(max_ns / 1e6, 1) if max_ns != Gst.CLOCK_TIME_NONE else None))
-        return False
-
     # ---------------------------------------------------------- negotiation
 
     def _audio_source_desc(self, pt):
@@ -253,7 +238,6 @@ class Viewer:
         result = pad.link(bin_.get_static_pad('sink'))
         log('info', f'receiving {kind}', sink=desc[:70], link=result.value_nick)
         emit({'type': 'media', 'kind': kind})
-        GLib.timeout_add_seconds(3, self._report_latency)
 
     def _live_queue(self):
         """

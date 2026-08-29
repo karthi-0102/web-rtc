@@ -363,13 +363,8 @@ class Peer:
               'candidate': candidate, 'sdpMLineIndex': mline_index})
 
     def _on_conn_state(self, elem, _param):
-        state = elem.get_property('connection-state').value_nick
-        emit({'type': 'state', 'id': self.id, 'connection': state})
-        # Before a peer connects the pipeline has no sink to query through, so
-        # the latency answer is a meaningless zero. Ask again once media is
-        # actually flowing, which is when the figure means something.
-        if state == 'connected':
-            GLib.timeout_add_seconds(2, self.server._report_latency)
+        emit({'type': 'state', 'id': self.id,
+              'connection': elem.get_property('connection-state').value_nick})
 
     def _on_ice_state(self, elem, _param):
         emit({'type': 'state', 'id': self.id,
@@ -531,28 +526,7 @@ class Server:
         self.pipe.set_state(Gst.State.PLAYING)
         log('info', 'media pipeline PLAYING', video=self.cfg['videoInput'],
             audio=self.cfg['audioInput'])
-        # Latency settles only once the pipeline has actually prerolled, so ask
-        # a little after PLAYING rather than immediately.
-        GLib.timeout_add_seconds(3, self._report_latency)
         emit({'type': 'ready'})
-
-    def _report_latency(self):
-        """
-        What this side contributes to the delay, so the rest can be attributed.
-
-        Subtracting this and the viewer's own figure from the observed
-        end-to-end delay leaves the AWS relay hop, which is the one term
-        nothing in this repo can tune.
-        """
-        query = Gst.Query.new_latency()
-        if not self.pipe.query(query):
-            log('debug', 'pipeline did not answer the latency query')
-            return False
-        live, min_ns, max_ns = query.parse_latency()
-        log('info', 'capture-side pipeline latency', live=live,
-            minMs=round(min_ns / 1e6, 1),
-            maxMs=(round(max_ns / 1e6, 1) if max_ns != Gst.CLOCK_TIME_NONE else None))
-        return False
 
     def _attach_preview(self):
         """Forward each JPEG the preview appsink produces to Node, base64'd."""

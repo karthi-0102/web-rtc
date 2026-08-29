@@ -243,6 +243,40 @@ for the rest of the call. `leaky=downstream` drops the oldest instead, and
 Measured on the sink alone, `buffer-time` 200 ms -> 40 ms took reported latency
 from 153.2 ms to 73.2 ms.
 
+### Measuring where the delay is
+
+Tuning buffer sizes by guesswork does not converge. Split the path first.
+
+**End to end, by eye.** `VIDEO_CLOCK_OVERLAY=true` burns the pipeline's running
+time into the picture above the tee, so the monitor thumbnail and the viewer's
+window carry the same stamp. Put them side by side; the gap between the two
+numbers is the whole delay, with no clock sync needed between machines.
+
+```
+VIDEO_CLOCK_OVERLAY=true npm run ingest
+npm run ingest-viewer          # elsewhere
+```
+
+**Local pipeline cost, by tracer.** GStreamer's own latency tracer reports
+source-to-sink time per buffer. Env vars reach the helper through the spawn, and
+its stderr is logged:
+
+```
+GST_TRACERS="latency(flags=pipeline)" GST_DEBUG="GST_TRACER:7" npm run ingest
+```
+
+Measured this way on a 20-core box, `videotestsrc -> videoconvert -> videoscale
+-> videorate -> 1280x720p30 -> x264enc(zerolatency, veryfast) -> h264parse`
+runs at 29.9 fps for 53% of one core, and the tracer reports **~4 ms** through
+the encode chain. The capture and encode side is not where the delay lives.
+
+Subtract the two local figures from the end-to-end one; the remainder is the
+AWS relay hop, and nothing in this repo tunes it.
+
+Do not use a pipeline latency *query* for this. Queried on the capture pipeline
+it is answered by the preview `appsink` (`sync=false`, so it reports zero) and
+returns a confident, wrong `0.0` rather than traversing into `webrtcbin`.
+
 ### Why GStreamer and not wrtc
 
 Ingestion requires **H.264**, and `@roamhq/wrtc` supports neither sending nor
