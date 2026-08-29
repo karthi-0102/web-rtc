@@ -65,10 +65,13 @@ function buildAudioSink() {
     log.info('recording inbound talk-back audio', { file });
     return `wavenc ! filesink location=${file}`;
   }
-  if (config.output.audioDevice) {
-    return `pulsesink device=${config.output.audioDevice} sync=false`;
-  }
-  return 'autoaudiosink sync=false';
+  // buffer-time is the sink's ring buffer and the floor on how late talk-back
+  // can be heard; the 200ms pulsesink default dominates every other local term
+  // in the path. latency-time is the write granularity underneath it.
+  // The helper falls back to autoaudiosink if pulsesink cannot be built.
+  const bufferUs = Math.max(10000, Math.round(config.talkback.sinkMs * 1000));
+  const device = config.output.audioDevice ? ` device=${config.output.audioDevice}` : '';
+  return `pulsesink${device} sync=false buffer-time=${bufferUs} latency-time=10000`;
 }
 
 async function main() {
@@ -106,6 +109,7 @@ async function main() {
     iceServers,
     logger: createLogger('gst'),
     audioOutPipeline: buildAudioSink(),
+    talkbackQueueMs: config.talkback.queueMs,
     previewFps,
   });
   // The GStreamer helper renders its own thumbnails (the media never enters

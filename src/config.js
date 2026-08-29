@@ -71,6 +71,18 @@ const config = {
     queueMs: num(process.env.PLAYOUT_QUEUE_MS, 200),
   },
 
+  // Inbound talk-back audio on the ingest master. Both of these bound how much
+  // delay the local playback path adds on top of whatever the network costs.
+  talkback: {
+    // Decoded backlog allowed before the oldest buffer is dropped. Without a
+    // cap a burst of late packets is played out in full and the delay it
+    // introduced is never recovered.
+    queueMs: num(process.env.TALKBACK_QUEUE_MS, 60),
+    // The sink's ring buffer, and so the floor on how late talk-back can be.
+    // pulsesink defaults to 200ms, which dominates every other local term.
+    sinkMs: num(process.env.TALKBACK_SINK_MS, 40),
+  },
+
   // How often to print RTP/ICE stats for a live connection.
   statsIntervalMs: num(process.env.STATS_INTERVAL_MS, 5000),
 

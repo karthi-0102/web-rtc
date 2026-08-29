@@ -50,7 +50,10 @@ function toGstIceServers(iceServers) {
  * and process-wide: 'ready', 'fatal' (msg), 'exit', 'preview' (jpegBuffer).
  */
 class GstMedia extends EventEmitter {
-  constructor({ media, iceServers, logger, audioOutPipeline, previewFps = 0 }) {
+  constructor({
+    media, iceServers, logger, audioOutPipeline, previewFps = 0,
+    talkbackQueueMs = 60,
+  }) {
     super();
     this.log = logger;
     this.ready = false;
@@ -67,6 +70,9 @@ class GstMedia extends EventEmitter {
       channels: media.audio.channels,
       audioBitrate: media.audio.bitrate,
       audioOutPipeline: audioOutPipeline || null,
+      // Caps the decoded backlog on inbound talk-back, so a burst of late
+      // packets cannot permanently add to how delayed it sounds.
+      talkbackQueueMs,
       stunServer,
       turnServers,
       // >0 makes the helper emit JPEG thumbnails of the published video.

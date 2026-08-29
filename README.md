@@ -212,27 +212,36 @@ So a channel is either a peer-to-peer intercom **or** an ingestion channel. It
 cannot be both, and `ingest-viewer.js` exists because of it. Keep a separate
 channel for the low-latency path.
 
-### Does the master receive audio *from* AWS? No.
+### Does the master receive audio *from* AWS? Yes.
 
-AWS's storage offer declares audio `sendrecv`, which suggests it might talk
-back. It does not. With a real sink attached and a pad probe counting buffers,
-a 70 s archiving session produced:
+AWS's storage offer declares audio `sendrecv`, and it means it: a viewer's
+talk-back is relayed through the storage session and arrives at the master.
 
-```
-INBOUND PAD appeared      : 0
-inbound buffers           : 0
-```
+An earlier round of testing here concluded the opposite, recording
+`INBOUND PAD appeared: 0` over a 70 s session. That measurement was taken while
+two separate faults were in play — the master defaulted to draining the storage
+peer's audio unheard, and the inbound pad was classified on caps read before
+they were negotiated, so a real Opus pad was filed as non-audio. With both
+fixed, talk-back is audible. Treat the old "strictly one-way" claim as retired.
 
-The probe is not broken — the same code against a talk-back viewer shows
-`FIRST inbound media buffer received` and then ~50 buffers/s (20 ms Opus
-frames). The storage session is strictly one-way ingestion, so the master's
-`AUDIO_OUT` is irrelevant while archiving; talk-back needs the peer-to-peer
-path on a non-ingestion channel.
+What it is *not* is fast. The relay goes viewer -> AWS -> master, and that hop
+is not tunable from here. What is tunable is the local playback path, which
+used to add ~200 ms of its own on top:
 
-The master nonetheless attaches a sink to the storage peer by default, so the
-audio plays the moment it ever does arrive. Nothing is lost by trying: when AWS
-sends nothing there is no pad to attach to, and the sink is never built. Set
-`INGEST_RECV_STORAGE_AUDIO=false` to go back to draining that pad unheard.
+| Term | Where | Default | Now |
+| --- | --- | --- | --- |
+| jitter buffer | `gst_peer.py` webrtcbin `latency` | 40 ms | 40 ms |
+| sink ring buffer | `pulsesink buffer-time` | 200 ms | `TALKBACK_SINK_MS`, 40 ms |
+| decoded backlog | queue before the sink | unbounded | `TALKBACK_QUEUE_MS`, 60 ms |
+
+The queue is the one that matters over a long session. The sink runs
+`sync=false`, so nothing downstream ever drops a late buffer; without a cap, a
+burst of late packets is played out in full and the delay it introduced stays
+for the rest of the call. `leaky=downstream` drops the oldest instead, and
+`opusdec plc=true` conceals the gap.
+
+Measured on the sink alone, `buffer-time` 200 ms -> 40 ms took reported latency
+from 153.2 ms to 73.2 ms.
 
 ### Why GStreamer and not wrtc
 

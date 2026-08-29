@@ -458,12 +458,28 @@ class Peer:
             self._drain(pad, 'non-audio pad')
             return False
         sink = self.server.cfg.get('audioOutPipeline') or 'autoaudiosink sync=false'
-        desc = f'rtpopusdepay ! opusdec ! audioconvert ! audioresample ! {sink}'
+        # leaky=downstream caps how far behind talk-back may fall. The sink runs
+        # sync=false, so nothing downstream ever drops a late buffer: without
+        # this a burst of packets is played out in full and the delay it added
+        # stays for the rest of the session. plc conceals what the queue drops.
+        queue_ns = int(self.server.cfg.get('talkbackQueueMs') or 60) * 1_000_000
+        chain = (f'rtpopusdepay ! opusdec plc=true ! audioconvert ! audioresample ! '
+                 f'queue leaky=downstream max-size-time={queue_ns} '
+                 f'max-size-buffers=0 max-size-bytes=0')
+        desc = f'{chain} ! {sink}'
         try:
             bin_ = Gst.parse_bin_from_description(desc, True)
         except GLib.Error as err:
-            log('error', 'failed to build audio sink', id=self.id, error=str(err))
-            return False
+            # A box without the PulseAudio plugin cannot build the configured
+            # sink. Falling back beats losing talk-back altogether.
+            log('warn', 'audio sink could not be built — falling back',
+                id=self.id, sink=sink, error=str(err))
+            sink = 'autoaudiosink sync=false'
+            try:
+                bin_ = Gst.parse_bin_from_description(f'{chain} ! {sink}', True)
+            except GLib.Error as err2:
+                log('error', 'failed to build audio sink', id=self.id, error=str(err2))
+                return False
         self.server.pipe.add(bin_)
         self.elements.append(bin_)
         bin_.sync_state_with_parent()
