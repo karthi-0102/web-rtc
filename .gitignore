@@ -1,2 +1,6 @@
 .env
 node_modules
+
+# Python bytecode from the GStreamer helpers
+__pycache__/
+*.pyc
