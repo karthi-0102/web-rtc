@@ -36,6 +36,10 @@ from gi.repository import Gst, GstWebRTC, GstSdp, GLib  # noqa: E402
 
 Gst.init(None)
 
+# Per-peer send-queue depth. Bounds how much encoded media a slow peer may hold
+# before the queue starts leaking, and so bounds the latency it adds.
+SEND_QUEUE_NS = 150 * 1_000_000
+
 _out_lock = threading.Lock()
 
 
@@ -253,14 +257,18 @@ class Peer:
         # No trailing capsfilter: parse_bin_from_description cannot end on bare
         # caps, and the payloader's pt property already stamps the payload type
         # onto its src pad, which is what webrtcbin reads.
+        # leaky=2 is leaky=downstream: once the branch holds more than
+        # max-size-time the oldest buffer is dropped, so a peer that cannot keep
+        # up falls behind by a bounded amount instead of an ever-growing one.
+        # That bound is also pure added latency on every peer, hence 150ms
+        # rather than the 300ms this used to carry.
+        queue = f'queue leaky=2 max-size-time={SEND_QUEUE_NS}'
         if kind == 'video':
             return (
-                f'queue leaky=2 max-size-time=300000000 ! '
+                f'{queue} ! '
                 f'rtph264pay config-interval=-1 aggregate-mode=zero-latency pt={pt}'
             )
-        return (
-            f'queue leaky=2 max-size-time=300000000 ! rtpopuspay pt={pt}'
-        )
+        return f'{queue} ! rtpopuspay pt={pt}'
 
     def _link_sources(self, order):
         """Attach each shared tee to the sink pad for its m-line index."""

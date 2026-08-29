@@ -60,6 +60,17 @@ const config = {
   // wired to the channel via UpdateMediaStorageConfiguration.
   storageStreamName: process.env.KVS_STREAM_NAME || null,
 
+  // Live playback latency budget for the GStreamer receiver.
+  playout: {
+    // webrtcbin's jitter buffer depth. Higher rides out jitter, lower plays
+    // closer to live. Below ~50ms packet reordering starts costing frames.
+    jitterMs: num(process.env.JITTER_LATENCY_MS, 100),
+    // How much decoded backlog a sink branch may hold before it drops the
+    // oldest buffer. This is the ceiling on how far behind live playback can
+    // fall after a network stall.
+    queueMs: num(process.env.PLAYOUT_QUEUE_MS, 200),
+  },
+
   // How often to print RTP/ICE stats for a live connection.
   statsIntervalMs: num(process.env.STATS_INTERVAL_MS, 5000),
 
@@ -79,6 +90,7 @@ function logConfig(role) {
   log.info('video in', config.video);
   log.info('audio in', config.audio);
   log.info('outputs', config.output);
+  log.info('playout', config.playout);
   log.debug('node', { version: process.version, pid: process.pid, platform: process.platform });
 }
 
