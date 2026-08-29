@@ -239,9 +239,25 @@ class Viewer:
         log('info', f'receiving {kind}', sink=desc[:70], link=result.value_nick)
         emit({'type': 'media', 'kind': kind})
 
+    def _live_queue(self):
+        """
+        Decouple decoding from webrtcbin's streaming thread, with a hard cap.
+
+        Two things go wrong without this. Decoding inline means avdec_h264 runs
+        on the thread feeding the jitter buffer, so a slow frame back-pressures
+        reception itself. And an unbounded queue turns every network hiccup into
+        permanent latency: the backlog is played out, never skipped.
+
+        leaky=downstream drops the oldest buffer once the branch holds more than
+        `queueMs`, so lateness stays bounded no matter how long the run is.
+        """
+        ns = int(self.cfg.get('queueMs', 200)) * 1_000_000
+        return (f'queue leaky=downstream max-size-time={ns} '
+                f'max-size-buffers=0 max-size-bytes=0')
+
     def _video_sink(self):
         mode = self.cfg.get('videoOut', 'play')
-        head = 'rtph264depay ! h264parse'
+        head = f'rtph264depay ! h264parse ! {self._live_queue()}'
         if mode == 'file':
             path = self.cfg['videoFile']
             # Fragmented MP4: writes as it goes, so the recording survives an
@@ -251,11 +267,17 @@ class Viewer:
                     f'! filesink location={path} sync=false')
         if mode == 'none':
             return f'{head} ! fakesink sync=false'
-        return f'{head} ! avdec_h264 ! videoconvert ! autovideosink sync=false'
+        # sync=true is load-bearing for live playback. It puts both sinks on the
+        # pipeline clock (which is what lip-syncs them from the RTCP sender
+        # reports) and, just as importantly, arms QoS: a frame that arrives past
+        # its deadline is dropped instead of shown late. With sync=false every
+        # sink renders on arrival, so lag accumulates and never recovers.
+        return f'{head} ! avdec_h264 ! videoconvert ! autovideosink sync=true'
 
     def _audio_sink(self):
         mode = self.cfg.get('audioOut', 'play')
-        head = 'rtpopusdepay ! opusdec ! audioconvert ! audioresample'
+        head = ('rtpopusdepay ! opusdec ! audioconvert ! audioresample ! '
+                f'{self._live_queue()}')
         if mode == 'file':
             path = self.cfg['audioFile']
             return f'{head} ! wavenc ! filesink location={path}'
@@ -263,8 +285,8 @@ class Viewer:
             return f'{head} ! fakesink sync=false'
         device = self.cfg.get('audioDevice')
         if device:
-            return f'{head} ! pulsesink device={device} sync=false'
-        return f'{head} ! autoaudiosink sync=false'
+            return f'{head} ! pulsesink device={device} sync=true'
+        return f'{head} ! autoaudiosink sync=true'
 
     # ------------------------------------------------------------- events
 

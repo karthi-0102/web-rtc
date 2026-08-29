@@ -59,6 +59,11 @@ async function main() {
     // AUDIO_INPUT=none to join as a pure listener.
     audioInput: config.audio.input,
     audioBitrate: config.audio.bitrate,
+    // Latency budget: jitter buffer depth, plus the cap on decoded backlog a
+    // sink may hold before dropping. Together these bound how far behind live
+    // playback can drift after a stall.
+    latencyMs: config.playout.jitterMs,
+    queueMs: config.playout.queueMs,
     videoOut: config.output.video,
     audioOut: config.output.audio,
     audioDevice: config.output.audioDevice,
