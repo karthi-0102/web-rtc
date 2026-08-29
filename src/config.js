@@ -83,6 +83,11 @@ const config = {
     sinkMs: num(process.env.TALKBACK_SINK_MS, 40),
   },
 
+  // Burn the pipeline's running time into the published picture. The monitor
+  // thumbnail and the viewer's window then carry the same stamp, and the gap
+  // between them is the end-to-end delay, measurable by eye.
+  clockOverlay: bool(process.env.VIDEO_CLOCK_OVERLAY, false),
+
   // How often to print RTP/ICE stats for a live connection.
   statsIntervalMs: num(process.env.STATS_INTERVAL_MS, 5000),
 
@@ -103,6 +108,8 @@ function logConfig(role) {
   log.info('audio in', config.audio);
   log.info('outputs', config.output);
   log.info('playout', config.playout);
+  log.info('talkback', config.talkback);
+  log.info('delay measurement', { clockOverlay: config.clockOverlay });
   log.debug('node', { version: process.version, pid: process.pid, platform: process.platform });
 }
 

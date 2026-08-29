@@ -52,7 +52,7 @@ function toGstIceServers(iceServers) {
 class GstMedia extends EventEmitter {
   constructor({
     media, iceServers, logger, audioOutPipeline, previewFps = 0,
-    talkbackQueueMs = 60,
+    talkbackQueueMs = 60, clockOverlay = false,
   }) {
     super();
     this.log = logger;
@@ -73,6 +73,8 @@ class GstMedia extends EventEmitter {
       // Caps the decoded backlog on inbound talk-back, so a burst of late
       // packets cannot permanently add to how delayed it sounds.
       talkbackQueueMs,
+      // Burns a running-time stamp into the picture, for measuring delay.
+      clockOverlay,
       stunServer,
       turnServers,
       // >0 makes the helper emit JPEG thumbnails of the published video.

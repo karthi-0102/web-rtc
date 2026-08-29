@@ -110,6 +110,7 @@ async function main() {
     logger: createLogger('gst'),
     audioOutPipeline: buildAudioSink(),
     talkbackQueueMs: config.talkback.queueMs,
+    clockOverlay: config.clockOverlay,
     previewFps,
   });
   // The GStreamer helper renders its own thumbnails (the media never enters
