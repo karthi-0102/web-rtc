@@ -54,6 +54,18 @@ def log(level, msg, **fields):
     emit({'type': 'log', 'level': level, 'msg': msg, 'fields': fields})
 
 
+def caps_summary(struct):
+    """Size and frame rate of a video caps structure, as plain strings.
+
+    get_value('framerate') raises "unknown type GstFraction" through
+    PyGObject, and an exception raised inside a caps probe fails negotiation
+    for the whole pipeline -- so read the fraction through its typed getter.
+    """
+    ok, num, denom = struct.get_fraction('framerate')
+    return (f'{struct.get_value("width")}x{struct.get_value("height")}',
+            f'{num}/{denom}' if ok else '(unset)')
+
+
 def preview_branch(cfg):
     """
     A low-rate JPEG copy of the frames being published, for the monitor window.
@@ -582,11 +594,65 @@ class Server:
         bus.connect('message::eos', lambda *_: log('warn', 'pipeline EOS'))
 
         self._attach_preview()
+        self._attach_encoder_report()
 
         self.pipe.set_state(Gst.State.PLAYING)
         log('info', 'media pipeline PLAYING', video=self.cfg['videoInput'],
             audio=self.cfg['audioInput'])
         emit({'type': 'ready'})
+
+    def _attach_encoder_report(self):
+        """
+        Report what the encoder is fed and what it produces.
+
+        This is the one place a soft picture is explained rather than guessed at.
+        The requested size is not what reaches the encoder: if the camera cannot
+        capture it, videoscale upscales and the size looks right while the detail
+        is gone. So log the caps at the encoder's own sink pad, and the bitrate
+        it actually achieves -- x264enc's `bitrate` is a target it will undershoot
+        when the CPU cannot keep up at this preset.
+        """
+        encoder = self.pipe.get_by_name('venc')
+        if encoder is None:
+            return
+
+        def on_caps(pad, info):
+            event = info.get_event()
+            if event.type == Gst.EventType.CAPS:
+                size, framerate = caps_summary(event.parse_caps().get_structure(0))
+                log('info', 'encoder input format', size=size,
+                    framerate=framerate,
+                    requested=f'{self.cfg["width"]}x{self.cfg["height"]}'
+                              f'@{self.cfg["fps"]}')
+                return Gst.PadProbeReturn.REMOVE
+            return Gst.PadProbeReturn.OK
+
+        encoder.get_static_pad('sink').add_probe(
+            Gst.PadProbeType.EVENT_DOWNSTREAM, on_caps)
+
+        counter = {'bytes': 0, 'frames': 0}
+
+        def count(_pad, info):
+            buf = info.get_buffer()
+            if buf is not None:
+                counter['bytes'] += buf.get_size()
+                counter['frames'] += 1
+            return Gst.PadProbeReturn.OK
+
+        encoder.get_static_pad('src').add_probe(Gst.PadProbeType.BUFFER, count)
+
+        window_s = 5
+
+        def report():
+            log('info', 'encoder output',
+                kbps=round(counter['bytes'] * 8 / window_s / 1000),
+                fps=round(counter['frames'] / window_s),
+                targetKbps=self.cfg['videoBitrateKbps'])
+            counter['bytes'] = 0
+            counter['frames'] = 0
+            return True
+
+        GLib.timeout_add_seconds(window_s, report)
 
     def _attach_preview(self):
         """Forward each JPEG the preview appsink produces to Node, base64'd."""

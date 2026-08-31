@@ -75,6 +75,7 @@ class Viewer:
         self.pipe = Gst.Pipeline.new('viewer')
         self.webrtc = None
         self.seen = {'video': 0, 'audio': 0}
+        self._rtp_stats = {}
 
     def build(self):
         self.webrtc = Gst.ElementFactory.make('webrtcbin', 'recv')
@@ -237,7 +238,117 @@ class Viewer:
         bin_.sync_state_with_parent()
         result = pad.link(bin_.get_static_pad('sink'))
         log('info', f'receiving {kind}', sink=desc[:70], link=result.value_nick)
+        if kind == 'video':
+            self._report_video_quality(pad, bin_)
         emit({'type': 'media', 'kind': kind})
+
+    def _report_video_quality(self, rtp_pad, sink_bin):
+        """
+        Report what the picture actually IS on arrival: decoded size and frame
+        rate, plus the received bitrate.
+
+        Both numbers are needed to explain a soft picture, and they point at
+        different culprits. A small decoded size means the sender captured or
+        scaled it small -- upscaling on playback cannot put the detail back. A
+        full size at a starved bitrate means the encoder is the bottleneck.
+        Without measuring here there is no way to tell them apart from a window.
+        """
+        decoder = sink_bin.get_by_name('vdec')
+        if decoder is not None:
+            src = decoder.get_static_pad('src')
+
+            def on_caps(pad, info):
+                event = info.get_event()
+                if event.type == Gst.EventType.CAPS:
+                    struct = event.parse_caps().get_structure(0)
+                    ok, num, denom = struct.get_fraction('framerate')
+                    log('info', 'decoded video format',
+                        size=f'{struct.get_value("width")}x'
+                             f'{struct.get_value("height")}',
+                        framerate=f'{num}/{denom}' if ok else '(unset)')
+                    return Gst.PadProbeReturn.REMOVE
+                return Gst.PadProbeReturn.OK
+
+            src.add_probe(Gst.PadProbeType.EVENT_DOWNSTREAM, on_caps)
+
+        # Received bitrate, averaged over each window: a 720p30 picture needs
+        # roughly 2000+ kbps before it stops looking soft on motion.
+        counter = {'bytes': 0, 'frames': 0}
+
+        def count(_pad, info):
+            buf = info.get_buffer()
+            if buf is not None:
+                counter['bytes'] += buf.get_size()
+                counter['frames'] += 1
+            return Gst.PadProbeReturn.OK
+
+        rtp_pad.add_probe(Gst.PadProbeType.BUFFER, count)
+
+        window_s = 5
+
+        def report():
+            kbps = round(counter['bytes'] * 8 / window_s / 1000)
+            fields = {'kbps': kbps,
+                      'packetsPerSec': round(counter['frames'] / window_s)}
+            fields.update(self._rtp_loss())
+            log('info', 'inbound video', **fields)
+            counter['bytes'] = 0
+            counter['frames'] = 0
+            return True
+
+        GLib.timeout_add_seconds(window_s, report)
+
+    def _rtp_loss(self):
+        """
+        Last known cumulative packets received/lost on inbound video RTP.
+
+        Separates the two ways a good encode still arrives soft. Loss means the
+        picture is damaged in transit -- webrtcbin sends at a fixed bitrate with
+        no congestion control, so an uplink narrower than that target drops
+        packets and the decoder smears over the gaps. No loss with a low bitrate
+        means the sender is producing less than it was asked for.
+
+        Collected asynchronously: waiting on the get-stats promise would block
+        the loop that is also driving playback.
+        """
+        def collected(promise, _user=None):
+            if promise.wait() != Gst.PromiseResult.REPLIED:
+                return
+            stats = promise.get_reply()
+            if stats is None:
+                return
+            found = {}
+
+            def visit(_field_id, value, _u):
+                if not isinstance(value, Gst.Structure):
+                    return True
+                if 'inbound-rtp' not in value.get_name():
+                    return True
+                if value.has_field('kind') and \
+                        value.get_string('kind') != 'video':
+                    return True
+                for name, key in (('packets-received', 'packetsReceived'),
+                                  ('packets-lost', 'packetsLost')):
+                    if not value.has_field(name):
+                        continue
+                    for getter in (value.get_uint64, value.get_int64,
+                                   value.get_int):
+                        try:
+                            ok, number = getter(name)
+                        except TypeError:
+                            continue
+                        if ok:
+                            found[key] = number
+                            break
+                return True
+
+            stats.foreach(visit, None)
+            self._rtp_stats = found
+
+        self.webrtc.emit('get-stats', None,
+                         Gst.Promise.new_with_change_func(collected, None))
+        # One window behind, which is close enough for a trend.
+        return dict(self._rtp_stats)
 
     def _live_queue(self):
         """
@@ -272,7 +383,8 @@ class Viewer:
         # reports) and, just as importantly, arms QoS: a frame that arrives past
         # its deadline is dropped instead of shown late. With sync=false every
         # sink renders on arrival, so lag accumulates and never recovers.
-        return f'{head} ! avdec_h264 ! videoconvert ! autovideosink sync=true'
+        return (f'{head} ! avdec_h264 name=vdec ! videoconvert ! '
+                f'autovideosink sync=true')
 
     def _audio_sink(self):
         mode = self.cfg.get('audioOut', 'play')
