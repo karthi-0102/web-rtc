@@ -77,13 +77,73 @@ def preview_branch(cfg):
     )
 
 
+_device_caps_cache = {}
+
+
+def _device_caps(device):
+    """Everything a v4l2 device can capture, or None if it is not enumerable.
+
+    Cached: enumeration opens the device, and a second DeviceMonitor in the same
+    process comes back empty while the first still holds it."""
+    if device not in _device_caps_cache:
+        monitor = Gst.DeviceMonitor.new()
+        monitor.add_filter('Video/Source', None)
+        found = None
+        for dev in monitor.get_devices() or []:
+            props = dev.get_properties()
+            path = props.get_string('device.path') if props else None
+            if path:
+                _device_caps_cache.setdefault(path, dev.get_caps())
+            if path == device:
+                found = dev.get_caps()
+        _device_caps_cache.setdefault(device, found)
+    return _device_caps_cache[device]
+
+
+def camera_caps(device, w, h, fps):
+    """
+    A capsfilter pinning the camera to w x h x fps, plus any decoder it needs.
+
+    Load-bearing for picture quality. Webcams typically offer their full
+    resolution only in MJPEG; raw YUY2 at that size is capped to 10-15fps by USB
+    bandwidth. Ask for raw 1280x720@30 and v4l2src silently negotiates the
+    largest raw mode that does reach 30fps -- 640x480 -- which videoscale then
+    upscales 2x. The picture is soft and wrongly stretched, and no encoder
+    setting recovers it, because the detail was never captured.
+
+    So probe the device and pin a mode that needs no upscale, MJPEG included.
+    Returns '' when nothing matches, leaving negotiation as it was.
+    """
+    caps = _device_caps(device)
+    if caps is None:
+        log('warn', 'camera not found in the device monitor; caps left to '
+                    'negotiation', device=device)
+        return ''
+
+    # Raw first: one less decode step when the device can hold the frame rate at
+    # this size. MJPEG otherwise -- how most cameras expose high-res modes.
+    # can_intersect does the matching, so framerate lists and ranges in the
+    # device's caps are handled without walking them by hand.
+    for mime, decoder in (('video/x-raw', ''), ('image/jpeg', ' ! jpegdec')):
+        wanted = Gst.Caps.from_string(
+            f'{mime},width={w},height={h},framerate={fps}/1')
+        if caps.can_intersect(wanted):
+            log('info', 'camera capture mode pinned',
+                device=device, format=mime, size=f'{w}x{h}', fps=fps)
+            return f' ! {mime},width={w},height={h},framerate={fps}/1{decoder}'
+
+    log('warn', 'camera cannot capture the requested mode; the picture will be '
+                'upscaled and soft', device=device, want=f'{w}x{h}@{fps}')
+    return ''
+
+
 def video_chain(cfg):
     src = cfg['videoInput']
     w, h, fps = cfg['width'], cfg['height'], cfg['fps']
     if src == 'test':
         head = 'videotestsrc is-live=true pattern=smpte'
     elif src.startswith('/dev/video'):
-        head = f'v4l2src device={src}'
+        head = f'v4l2src device={src}{camera_caps(src, w, h, fps)}'
     elif src == 'screen':
         head = 'ximagesrc use-damage=false'
     else:

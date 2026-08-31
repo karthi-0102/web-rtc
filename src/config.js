@@ -31,8 +31,11 @@ const config = {
     width: num(process.env.VIDEO_WIDTH, 640),
     height: num(process.env.VIDEO_HEIGHT, 480),
     fps: num(process.env.VIDEO_FPS, 30),
-    // H.264 target bitrate for the ingestion path (kbps).
-    bitrateKbps: num(process.env.VIDEO_BITRATE_KBPS, 1200),
+    // H.264 target bitrate for the ingestion path (kbps). Sized for 720p30 on
+    // zerolatency/constrained-baseline, which has no B-frames and no CABAC to
+    // lean on: below ~2000 the picture goes visibly soft on any motion. Scale
+    // it with pixel count -- roughly a quarter of this for 640x480.
+    bitrateKbps: num(process.env.VIDEO_BITRATE_KBPS, 2500),
   },
 
   audio: {
